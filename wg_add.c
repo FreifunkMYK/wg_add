@@ -485,6 +485,19 @@ int main(int argc, char **argv) {
 	uint16_t port;
 
 	{
+#define NEED_LIBGCRYPT_VERSION "1.8.0"
+		if(!gcry_check_version (NEED_LIBGCRYPT_VERSION)) {
+			printf("libgcrypt is too old (need %s, have %s)\n",
+					NEED_LIBGCRYPT_VERSION, gcry_check_version (NULL));
+			return 1;
+		}
+		gcry_control (GCRYCTL_SUSPEND_SECMEM_WARN);
+		gcry_control (GCRYCTL_INIT_SECMEM, 16384, 0);
+		gcry_control (GCRYCTL_RESUME_SECMEM_WARN);
+		gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
+	}
+
+	{
 		wg_device *device;
 		if(wg_get_device(&device, wg_device_name) < 0) {
 			printf("Unable to get wg device\n");
