@@ -13,6 +13,16 @@
 #include "wireguard.h"
 #include "key_tree.h"
 
+#define timediff(a, b, result)					\
+	do {										\
+		result.tv_sec = a.tv_sec - b.tv_sec;	\
+		result.tv_nsec = a.tv_nsec - b.tv_nsec;	\
+		if (result.tv_nsec < 0) {				\
+			--result.tv_sec;					\
+			result.tv_nsec += 1000000000L;		\
+		}										\
+	} while (0)
+
 wg_key server_priv_key;
 wg_key server_pub_key;
 wg_key mac1_key;
@@ -153,6 +163,7 @@ void remove_key_from_wg(wg_key key) {
 void * flush_stale_peers(void *) {
 	struct timespec time_to_sleep = { .tv_sec = 1, .tv_nsec = 0 };
 	struct timespec last_run;
+	struct timespec diff;
 	clock_gettime(CLOCK_MONOTONIC, &last_run);
 	while(run)
 	{
@@ -161,7 +172,8 @@ void * flush_stale_peers(void *) {
 		{
 			nanosleep(&time_to_sleep, NULL);
 			clock_gettime(CLOCK_MONOTONIC, &now);
-		} while( run &&  now.tv_sec - last_run.tv_sec < 300 );
+			timediff(now, last_run, diff);
+		} while( run &&  diff.tv_sec < 300 );
 
 		clock_gettime(CLOCK_MONOTONIC, &last_run);
 
@@ -180,7 +192,8 @@ void * flush_stale_peers(void *) {
 			if(!key_in_tree(key_tree, peer->public_key))
 				add_key_to_tree(key_tree, peer->public_key);
 
-			if(now.tv_sec - peer->last_handshake_time.tv_sec > (3 * 60 * 60))
+			timediff(now, peer->last_handshake_time, diff);
+			if(diff.tv_sec > (3 * 60 * 60))
 				remove_key_from_wg(peer->public_key);
 		}
 
