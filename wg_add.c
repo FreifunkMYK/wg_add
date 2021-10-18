@@ -163,6 +163,7 @@ void * flush_stale_peers(void *) {
 			clock_gettime(CLOCK_MONOTONIC, &now);
 		} while( run &&  now.tv_sec - last_run.tv_sec < 300 );
 
+		clock_gettime(CLOCK_MONOTONIC, &last_run);
 
 		printf("flushing stale peers...\n");
 		wg_device *device;
