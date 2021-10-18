@@ -484,6 +484,9 @@ int main(int argc, char **argv) {
 	vx_device_name = argv[3];
 	uint16_t port;
 
+	// make output line buffered
+	setvbuf(stdout, NULL, _IOLBF, 0);
+
 	{
 #define NEED_LIBGCRYPT_VERSION "1.8.0"
 		if(!gcry_check_version (NEED_LIBGCRYPT_VERSION)) {
