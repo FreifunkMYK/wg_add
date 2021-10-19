@@ -364,9 +364,10 @@ bool wg_mac_verify(const u_char *packet) {
 }
 
 void process_wg_initiation(const u_char *packet, uint16_t len) {
-	if(!wg_mac_verify(packet)) {
+	if(len < 148)
 		return;
-	}
+	if(!wg_mac_verify(packet))
+		return;
 	wg_key ekey_pub;
 	memcpy(ekey_pub, packet+8, 32);
 
