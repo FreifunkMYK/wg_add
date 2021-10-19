@@ -1,9 +1,15 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pcap.h>
+#include <stdbool.h>
 #include <netinet/in.h>
-#include <netinet/if_ether.h>
+#include <netinet/udp.h>
+#include <netinet/ip.h>
+#include <linux/filter.h>
+#include <sys/socket.h>
+#include <poll.h>
+#include <arpa/inet.h>
 #include <pthread.h>
 #include <time.h>
 #include <signal.h>
@@ -29,8 +35,6 @@ wg_key mac1_key;
 char *wg_device_name;
 char *vx_device_name;
 
-pcap_t *pcap_handle;
-
 wg_key hash_of_construction;
 wg_key hash_of_c_identifier;
 
@@ -42,7 +46,6 @@ void signal_handler(int sig) {
 	if( sig != SIGTERM )
 		return;
 	run = false;
-	pcap_breakloop(pcap_handle);
 }
 
 void printf_key(const char * name, wg_key key) {
@@ -186,7 +189,7 @@ void * flush_stale_peers(void *) {
 		}
 
 		clock_gettime(CLOCK_REALTIME, &now);
-		
+
 		wg_peer *peer;
 		wg_for_each_peer(device, peer) {
 			if(!key_in_tree(key_tree, peer->public_key))
@@ -364,6 +367,7 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	if(!wg_mac_verify(packet)) {
 		return;
 	}
+	hex_dump(packet, len);
 	wg_key ekey_pub;
 	memcpy(ekey_pub, packet+8, 32);
 
@@ -425,65 +429,46 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	return;
 }
 
-void packet_handler(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
-	struct ether_header *eth_header;
-	const u_char *ip_header;
-	const u_char *udp_header;
-	const u_char *payload;
+void apply_bpf4(int sock, uint16_t port) {
+	struct sock_filter filter[] = {
+		BPF_STMT(BPF_LD+BPF_H+BPF_ABS, 22),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, port, 0, 3),
+		BPF_STMT(BPF_LD+BPF_B+BPF_ABS, 28),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, 0x01, 0, 1),
+		BPF_STMT(BPF_RET + BPF_K, -1),
+		BPF_STMT(BPF_RET + BPF_K, 0)
+	};
 
-	int eth_header_len = ETH_HLEN;
-	int ip_header_len;
-	int udp_header_len = 8;
-	int payload_len;
+	struct sock_fprog filter_prog = {
+		.len = sizeof(filter) / sizeof(filter[0]),
+		.filter = filter
+	};
 
-	eth_header = (struct ether_header *) packet;
-	uint32_t eth_type = ntohs(eth_header->ether_type);
-	if( eth_type != ETHERTYPE_IP  && eth_type != ETHERTYPE_IPV6 ) {
-		printf("unknown ether_type: %i\n", eth_type);
-		return;
+	if(setsockopt(sock, SOL_SOCKET, SO_ATTACH_FILTER, &filter_prog, sizeof(filter_prog)) < 0) {
+		perror("setsockopt(4,bpf)");
+		exit(1);
 	}
+}
 
-	if( header->caplen != header->len ) {
-		printf("caplen != len\n");
-		return;
+void apply_bpf6(int sock, uint16_t port) {
+	struct sock_filter filter[] = {
+		BPF_STMT(BPF_LD+BPF_H+BPF_ABS, 2),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, port, 0, 3),
+		BPF_STMT(BPF_LD+BPF_B+BPF_ABS, 8),
+		BPF_JUMP(BPF_JMP+BPF_JEQ+BPF_K, 0x01, 0, 1),
+		BPF_STMT(BPF_RET + BPF_K, -1),
+		BPF_STMT(BPF_RET + BPF_K, 0)
+	};
+
+	struct sock_fprog filter_prog = {
+		.len = sizeof(filter) / sizeof(filter[0]),
+		.filter = filter
+	};
+
+	if(setsockopt(sock, SOL_SOCKET, SO_ATTACH_FILTER, &filter_prog, sizeof(filter_prog)) < 0) {
+		perror("setsockopt(6,bpf)");
+		exit(1);
 	}
-
-	ip_header = packet + eth_header_len;
-	u_char ip_protocol;
-
-	if( ((*ip_header) & 0xF0) >> 4 == 4 ) { // IPv4
-		ip_header_len = ((*ip_header) & 0x0F) * 4;
-		ip_protocol = *(ip_header + 9);
-	}
-	else if( ((*ip_header) & 0xF0) >> 4 == 6 ) { // IPv6
-		ip_header_len = 40;
-		ip_protocol = *(ip_header + 6);
-	}
-	else {
-		return;
-	}
-
-	if( ip_protocol != IPPROTO_UDP ) {
-		printf("not UDP: %i\n", ip_protocol);
-		return;
-	}
-
-	udp_header = packet + eth_header_len + ip_header_len;
-
-	payload_len = header->caplen - (eth_header_len + ip_header_len + udp_header_len);
-	payload = packet + eth_header_len + ip_header_len + udp_header_len;
-
-	if( *payload != 0x01 ) { // Not a INITIATION
-		return;
-	}
-
-	if( payload_len != 148 ) {
-		return;
-	}
-
-	process_wg_initiation(payload, payload_len);
-
-	return;
 }
 
 int main(int argc, char **argv) {
@@ -519,7 +504,7 @@ int main(int argc, char **argv) {
 			printf("Unable to get wg device\n");
 			return 1;
 		}
-		
+
 		if(device->flags & WGDEVICE_HAS_PRIVATE_KEY) {
 			memcpy(&server_priv_key, device->private_key, 32);
 			memcpy(&server_pub_key, device->public_key, 32);
@@ -556,6 +541,38 @@ int main(int argc, char **argv) {
 		wg_free_device(device);
 	}
 
+	size_t device_name_len = strnlen(device_name, IFNAMSIZ);
+
+	int sockfd4 = socket(AF_INET, SOCK_RAW, IPPROTO_UDP);
+	if( sockfd4 < 0) {
+		perror("socket 4");
+		return 1;
+	}
+	if(setsockopt(sockfd4, SOL_SOCKET, SO_BINDTODEVICE, device_name, device_name_len) < 0) {
+		perror("setsockopt(4,bindtodevice)");
+		exit(1);
+	}
+	apply_bpf4(sockfd4, port);
+
+	int sockfd6 = socket(AF_INET6, SOCK_RAW, IPPROTO_UDP);
+	if( sockfd6 < 0) {
+		perror("socket 6");
+		return 1;
+	}
+	if(setsockopt(sockfd6, SOL_SOCKET, SO_BINDTODEVICE, device_name, device_name_len) < 0) {
+		perror("setsockopt(6,bindtodevice)");
+		exit(1);
+	}
+	apply_bpf6(sockfd6, port);
+
+	struct pollfd pollfds[2];
+	pollfds[0].fd = sockfd4;
+	pollfds[0].events = POLLIN;
+	pollfds[1].fd = sockfd6;
+	pollfds[1].events = POLLIN;
+
+	char buf[2048];
+
 	pthread_t flush_thread;
 
 	{
@@ -566,38 +583,41 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	char filter_str[1024];
-	sprintf(filter_str, "inbound and udp port %i and (ip[28] == 0x01 or ip6[48] == 0x01)", port);
-	char error_buffer[PCAP_ERRBUF_SIZE];
-	struct bpf_program filter;
-	bpf_u_int32 subnet_mask, ip;
-
-	if (pcap_lookupnet(device_name, &ip, &subnet_mask, error_buffer) == -1) {
-		printf("Could not get information for device: %s\n", device_name);
-		ip = 0;
-		subnet_mask = 0;
-	}
-	pcap_handle = pcap_open_live(device_name, BUFSIZ, 1, 1000, error_buffer);
-	if (pcap_handle == NULL) {
-		printf("Could not open %s - %s\n", device_name, error_buffer);
-		return 2;
-	}
-	if (pcap_compile(pcap_handle, &filter, filter_str, 0, ip) == -1) {
-		printf("Bad filter - %s\n", pcap_geterr(pcap_handle));
-		return 2;
-	}
-	if (pcap_setfilter(pcap_handle, &filter) == -1) {
-		printf("Error setting filter - %s\n", pcap_geterr(pcap_handle));
-		return 2;
-	}
 
 	signal(SIGTERM, signal_handler);
 
 	printf("running...\n");
 
-	pcap_loop(pcap_handle, 0, packet_handler, NULL);
+	while( run ) {
+		int rc = poll(pollfds, 2, 1000);
+		if( rc < 0 ) {
+			perror("poll");
+			return 1;
+		}
+		if( rc == 0 )
+			continue;
+		if(pollfds[0].revents & POLLIN) {
+			int len = recv(sockfd4, &buf, 2048, 0);
+			if(len < 0) {
+				perror("recv");
+				return 1;
+			}
+			if(len > 28)
+				process_wg_initiation(buf+28, len-28);
+		}
+		if(pollfds[1].revents & POLLIN) {
+			int len = recv(sockfd6, &buf, 2048, 0);
+			if(len < 0) {
+				perror("recv");
+				return 1;
+			}
+			if(len > 8)
+				process_wg_initiation(buf+8, len-8);
+		}
+	}
 
-	run = false;
+	close(sockfd4);
+	close(sockfd6);
 
 	pthread_join( flush_thread, NULL );
 
