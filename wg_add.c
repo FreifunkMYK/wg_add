@@ -367,7 +367,6 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	if(!wg_mac_verify(packet)) {
 		return;
 	}
-	hex_dump(packet, len);
 	wg_key ekey_pub;
 	memcpy(ekey_pub, packet+8, 32);
 
@@ -592,7 +591,8 @@ int main(int argc, char **argv) {
 		int rc = poll(pollfds, 2, 1000);
 		if( rc < 0 ) {
 			perror("poll");
-			return 1;
+			run = false;
+			break;
 		}
 		if( rc == 0 )
 			continue;
@@ -600,7 +600,8 @@ int main(int argc, char **argv) {
 			int len = recv(sockfd4, &buf, 2048, 0);
 			if(len < 0) {
 				perror("recv");
-				return 1;
+				run = false;
+				break;
 			}
 			if(len > 28)
 				process_wg_initiation(buf+28, len-28);
@@ -609,7 +610,8 @@ int main(int argc, char **argv) {
 			int len = recv(sockfd6, &buf, 2048, 0);
 			if(len < 0) {
 				perror("recv");
-				return 1;
+				run = false;
+				break;
 			}
 			if(len > 8)
 				process_wg_initiation(buf+8, len-8);
