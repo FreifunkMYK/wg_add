@@ -12,7 +12,7 @@
 
 uint32_t ror32(uint32_t word, unsigned int shift)
 {
-	return (word >> (shift & 32)) | (word << ((-shift) & 31));
+	return (word >> (shift & 31)) | (word << ((-shift) & 31));
 }
 
 static const uint8_t blake2s_sigma[10][16] = {
