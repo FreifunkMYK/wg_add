@@ -17,6 +17,7 @@
 #include <gcrypt.h>
 
 #include "blake2s.h"
+#include "curve25519.h"
 #include "wireguard.h"
 #include "key_tree.h"
 
@@ -231,82 +232,6 @@ static void wg_kdf(const wg_key *key, const u_char *input, size_t input_len, int
 	memset(output, 0, BLAKE2S_HASH_SIZE + 1);
 }
 
-static inline void
-copy_and_reverse(unsigned char *dest, const unsigned char *src, size_t n)
-{
-	for (size_t i = 0; i < n; i++) {
-	dest[n - 1 - i] = src[i];
-	}
-}
-
-static int
-x25519_mpi(unsigned char *q, const unsigned char *n, gcry_mpi_t mpi_p)
-{
-    unsigned char priv_be[32];
-    unsigned char result_be[32];
-    size_t result_len = 0;
-    gcry_mpi_t mpi = NULL;
-    gcry_ctx_t ctx = NULL;
-    gcry_mpi_point_t P = NULL;
-    gcry_mpi_point_t Q = NULL;
-    int r = -1;
-
-    /* Default to infinity (all zeroes). */
-    memset(q, 0, 32);
-
-    /* Keys are in little-endian, but gcry_mpi_scan expects big endian. Convert
-     * keys and ensure that the result is a valid Curve25519 secret scalar. */
-    copy_and_reverse(priv_be, n, 32);
-    priv_be[0] &= 127;
-    priv_be[0] |= 64;
-    priv_be[31] &= 248;
-    gcry_mpi_scan(&mpi, GCRYMPI_FMT_USG, priv_be, 32, NULL);
-
-    if (gcry_mpi_ec_new(&ctx, NULL, "Curve25519")) {
-        /* Should not happen, possibly out-of-memory. */
-        goto leave;
-    }
-
-    /* Compute Q = nP */
-    Q = gcry_mpi_point_new(0);
-    P = gcry_mpi_point_set(NULL, mpi_p, NULL, GCRYMPI_CONST_ONE);
-    gcry_mpi_ec_mul(Q, mpi, P, ctx);
-
-    /* Note: mpi is reused to store the result. */
-    if (gcry_mpi_ec_get_affine(mpi, NULL, Q, ctx)) {
-        /* Infinity. */
-        goto leave;
-    }
-
-    if (gcry_mpi_print(GCRYMPI_FMT_USG, result_be, 32, &result_len, mpi)) {
-        /* Should not happen, possibly out-of-memory. */
-        goto leave;
-    }
-    copy_and_reverse(q, result_be, result_len);
-    r = 0;
-
-leave:
-    gcry_mpi_point_release(P);
-    gcry_mpi_point_release(Q);
-    gcry_ctx_release(ctx);
-    gcry_mpi_release(mpi);
-    /* XXX erase priv_be and result_be */
-    return r;
-}
-
-
-static void dh_x25519(wg_key *shared_secret, const wg_key *priv, const wg_key *pub) {
-	unsigned char p_be[32];
-	gcry_mpi_t mpi_p = NULL;
-
-	copy_and_reverse(p_be, (const char *)pub, 32);
-	/* Clear unused bit. */
-	p_be[0] &= 0x7f;
-	gcry_mpi_scan(&mpi_p, GCRYMPI_FMT_USG, p_be, 32, NULL);
-	x25519_mpi((char *)shared_secret, (const char *)priv, mpi_p);
-	gcry_mpi_release(mpi_p);
-}
-
 void hex_dump(const void * data, size_t len) {
 	for( int i = 0; i < len; i++ ) {
 		printf("%02x ", *(const u_char *)(data+i));
@@ -350,7 +275,7 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	wg_mix_hash(&h, ekey_pub, 32);
 	//  dh1 = DH(Spriv_r, msg.ephemeral)
 	wg_key dh1 = {0};
-	dh_x25519(&dh1, &server_priv_key, &ekey_pub);
+	curve25519((uint8_t *)&dh1, (uint8_t *)&server_priv_key, (uint8_t *)&ekey_pub);
 	// (c, k) = KDF2(c, dh1)
 	wg_kdf(c, dh1, 32, 2, c_and_k);
 	// Spub_i = AEAD-Decrypt(k, 0, msg.static, h)
