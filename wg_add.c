@@ -16,6 +16,7 @@
 
 #include <gcrypt.h>
 
+#include "blake2s.h"
 #include "wireguard.h"
 #include "key_tree.h"
 
@@ -85,7 +86,7 @@ void add_key_to_wg(wg_key key) {
 		wg_device device = {0};
 		wg_peer peer = {0};
 		wg_allowedip allowed_ip = {0};
-		strncpy(device.name, wg_device_name, IFNAMSIZ -  1);
+		strncpy(device.name, wg_device_name, IFNAMSIZ - 1);
 		device.name[IFNAMSIZ-1] = '\0';
 		device.first_peer = &peer;
 		device.last_peer = &peer;
@@ -134,7 +135,7 @@ void remove_key_from_wg(wg_key key) {
 		wg_device device = {0};
 		wg_peer peer = {0};
 		wg_allowedip allowed_ip = {0};
-		strncpy(device.name, wg_device_name, IFNAMSIZ -  1);
+		strncpy(device.name, wg_device_name, IFNAMSIZ - 1);
 		device.name[IFNAMSIZ-1] = '\0';
 		device.first_peer = &peer;
 		device.last_peer = &peer;
@@ -176,7 +177,7 @@ void * flush_stale_peers(void *) {
 			nanosleep(&time_to_sleep, NULL);
 			clock_gettime(CLOCK_MONOTONIC, &now);
 			timediff(now, last_run, diff);
-		} while( run &&  diff.tv_sec < 300 );
+		} while( run && diff.tv_sec < 300 );
 
 		clock_gettime(CLOCK_MONOTONIC, &last_run);
 
@@ -204,60 +205,30 @@ void * flush_stale_peers(void *) {
 	}
 }
 
-bool wg_mix_hash(wg_key *h, const void * data, size_t data_len) {
-	gcry_md_hd_t hd;
-	if (gcry_md_open(&hd, GCRY_MD_BLAKE2S_256, 0)) {
-		return false;
-	}
-	gcry_md_write(hd, h, sizeof(wg_key));
-	gcry_md_write(hd, data, data_len);
-	memcpy(h, gcry_md_read(hd, 0), sizeof(wg_key));
-	gcry_md_close(hd);
-	return true;
+void wg_mix_hash(wg_key *h, const void * data, size_t data_len) {
+	struct blake2s_state blake;
+
+	blake2s_init(&blake, BLAKE2S_HASH_SIZE);
+	blake2s_update(&blake, (uint8_t *)h, sizeof(wg_key));
+	blake2s_update(&blake, data, data_len);
+	blake2s_final(&blake, (uint8_t *)h);
 }
 
-static bool wg_kdf(const wg_key *key, const u_char *input, size_t input_len, int n, wg_key *out)
+static void wg_kdf(const wg_key *key, const u_char *input, size_t input_len, int n, wg_key *out)
 {
-	u_char          prk[32];    /* Blake2s_256 hash output. */
-	gcry_error_t    err;
-	{
-		gcry_md_hd_t hmac_handle;
-		err = gcry_md_open(&hmac_handle, GCRY_MD_BLAKE2S_256, GCRY_MD_FLAG_HMAC);
-		if( err ) {
-			return false;
-		}
-		err = gcry_md_setkey(hmac_handle, key, 32);
-		if( err ) {
-			gcry_md_close(hmac_handle);
-			return false;
-		}
-		gcry_md_write(hmac_handle, input, input_len);
-		memcpy(prk, gcry_md_read(hmac_handle, 0), gcry_md_get_algo_dlen(GCRY_MD_BLAKE2S_256));
-		gcry_md_close(hmac_handle);
+	uint8_t output[BLAKE2S_HASH_SIZE + 1];
+	uint8_t secret[BLAKE2S_HASH_SIZE];
+
+	blake2s256_hmac(secret, input, (uint8_t *)key, input_len, 32);
+	output[0] = 1;
+	for (size_t offset = 0; offset < n; offset++) {
+		output[BLAKE2S_HASH_SIZE] = offset + 1;
+		blake2s256_hmac(output, output, secret, (offset == 0) ? 1 : (BLAKE2S_HASH_SIZE + 1), BLAKE2S_HASH_SIZE); 
+		memcpy(out + offset, output, BLAKE2S_HASH_SIZE);
 	}
-	{
-		u_char          lastoutput[32];
-		gcry_md_hd_t    h;
 
-		err = gcry_md_open(&h, GCRY_MD_BLAKE2S_256, GCRY_MD_FLAG_HMAC);
-		if( err ) {
-			return false;
-		}
-		for (size_t offset = 0; offset < n; offset++) {
-			gcry_md_reset(h);
-			gcry_md_setkey(h, prk, 32);
-			if (offset > 0) {
-				gcry_md_write(h, lastoutput, 32);
-			}
-			gcry_md_putc(h, (u_char) (offset + 1));
-
-			memcpy(lastoutput, gcry_md_read(h, GCRY_MD_BLAKE2S_256), 32);
-			memcpy(out + offset, lastoutput, 32);
-		}
-
-		gcry_md_close(h);
-	}
-	return true;
+	memset(secret, 0, BLAKE2S_HASH_SIZE);
+	memset(output, 0, BLAKE2S_HASH_SIZE + 1);
 }
 
 static inline void
@@ -347,20 +318,9 @@ void hex_dump(const void * data, size_t len) {
 }
 
 bool wg_mac_verify(const u_char *packet) {
-	bool ok = false;
-	gcry_md_hd_t hd;
-	if (gcry_md_open(&hd, GCRY_MD_BLAKE2S_128, 0) == 0) {
-		gcry_error_t r;
-		// not documented by Libgcrypt, but required for keyed blake2s
-		r = gcry_md_setkey(hd, mac1_key, 32);
-		if( r != 0 ) {
-			return ok;
-		}
-		gcry_md_write(hd, packet, 116);
-		ok = memcmp((packet+116), gcry_md_read(hd, 0), 16) == 0;
-		gcry_md_close(hd);
-	}
-	return ok;
+	uint8_t computed_mac[16];
+	blake2s(computed_mac, packet, mac1_key, 16, 116, 32);
+	return memcmp((packet+116), computed_mac, 16) == 0;
 }
 
 void process_wg_initiation(const u_char *packet, uint16_t len) {
@@ -508,15 +468,12 @@ int main(int argc, char **argv) {
 		if(device->flags & WGDEVICE_HAS_PRIVATE_KEY) {
 			memcpy(&server_priv_key, device->private_key, 32);
 			memcpy(&server_pub_key, device->public_key, 32);
-			gcry_md_hd_t hd;
-			if( gcry_md_open(&hd, GCRY_MD_BLAKE2S_256, 0) != 0 ) {
-				return 1;
-			}
+			struct blake2s_state blake;
 			const char wg_label_mac1[] = "mac1----";
-			gcry_md_write(hd, wg_label_mac1, strlen(wg_label_mac1));
-			gcry_md_write(hd, server_pub_key, sizeof(wg_key));
-			memcpy(mac1_key, gcry_md_read(hd, 0), sizeof(wg_key));
-			gcry_md_close(hd);
+			blake2s_init(&blake, BLAKE2S_HASH_SIZE);
+			blake2s_update(&blake, wg_label_mac1, strlen(wg_label_mac1));
+			blake2s_update(&blake, server_pub_key, sizeof(wg_key));
+			blake2s_final(&blake, mac1_key);
 		}
 		else {
 			printf("%s has no private key\n", wg_device_name);
@@ -532,7 +489,7 @@ int main(int argc, char **argv) {
 		}
 
 		static const char construction[] = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
-		gcry_md_hash_buffer(GCRY_MD_BLAKE2S_256, hash_of_construction, construction, strlen(construction));
+		blake2s(hash_of_construction, construction, NULL, BLAKE2S_HASH_SIZE, strlen(construction), 0);
 
 		static const char wg_identifier[] = "WireGuard v1 zx2c4 Jason@zx2c4.com";
 		memcpy(&hash_of_c_identifier, hash_of_construction, sizeof(wg_key));
