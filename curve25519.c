@@ -1,4 +1,5 @@
 #include "curve25519.h"
+#include "byteorder.h"
 
 #include <string.h>
 
@@ -17,33 +18,15 @@ typedef struct fe_loose { uint32_t v[10]; } fe_loose;
 
 static inline void fe_frombytes_impl(uint32_t h[10], const uint8_t *s)
 {
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-#define swap32(x) ((uint32_t)( \
-			(((uint32_t)(x) & 0x000000ffu) << 24) | \
-			(((uint32_t)(x) & 0x0000ff00u) <<  8) | \
-			(((uint32_t)(x) & 0x00ff0000u) >>  8) | \
-			(((uint32_t)(x) & 0xff000000u) >> 24)))
 	/* Ignores top bit of s. */
-	uint32_t a0 = swap32(s);
-	uint32_t a1 = swap32(s+4);
-	uint32_t a2 = swap32(s+8);
-	uint32_t a3 = swap32(s+12);
-	uint32_t a4 = swap32(s+16);
-	uint32_t a5 = swap32(s+20);
-	uint32_t a6 = swap32(s+24);
-	uint32_t a7 = swap32(s+28);
-#undef swap32
-#else
-	/* Ignores top bit of s. */
-	uint32_t a0 = *(s);
-	uint32_t a1 = *(s+4);
-	uint32_t a2 = *(s+8);
-	uint32_t a3 = *(s+12);
-	uint32_t a4 = *(s+16);
-	uint32_t a5 = *(s+20);
-	uint32_t a6 = *(s+24);
-	uint32_t a7 = *(s+28);
-#endif
+	uint32_t a0 = le32_to_cpus(s);
+	uint32_t a1 = le32_to_cpus(s+4);
+	uint32_t a2 = le32_to_cpus(s+8);
+	uint32_t a3 = le32_to_cpus(s+12);
+	uint32_t a4 = le32_to_cpus(s+16);
+	uint32_t a5 = le32_to_cpus(s+20);
+	uint32_t a6 = le32_to_cpus(s+24);
+	uint32_t a7 = le32_to_cpus(s+28);
 	h[0] = a0&((1<<26)-1);                    /* 26 used, 32-26 left.   26 */
 	h[1] = (a0>>26) | ((a1&((1<<19)-1))<< 6); /* (32-26) + 19 =  6+19 = 25 */
 	h[2] = (a1>>19) | ((a2&((1<<13)-1))<<13); /* (32-19) + 13 = 13+13 = 26 */

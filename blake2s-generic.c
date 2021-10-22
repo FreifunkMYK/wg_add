@@ -9,6 +9,7 @@
  */
 
 #include "blake2s.h"
+#include "byteorder.h"
 
 uint32_t ror32(uint32_t word, unsigned int shift)
 {
@@ -48,22 +49,7 @@ void blake2s_compress_generic(struct blake2s_state *state,const uint8_t *block,
 	while (nblocks > 0) {
 		blake2s_increment_counter(state, inc);
 		memcpy(m, block, BLAKE2S_BLOCK_SIZE);
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-#define swap32(x) ((uint32_t)( \
-			(((uint32_t)(x) & 0x000000ffu) << 24) | \
-			(((uint32_t)(x) & 0x0000ff00u) <<  8) | \
-			(((uint32_t)(x) & 0x00ff0000u) >>  8) | \
-			(((uint32_t)(x) & 0xff000000u) >> 24)))
-	state->h[0] = swap32(state->h[0]);
-	state->h[1] = swap32(state->h[1]);
-	state->h[2] = swap32(state->h[2]);
-	state->h[3] = swap32(state->h[3]);
-	state->h[4] = swap32(state->h[4]);
-	state->h[5] = swap32(state->h[5]);
-	state->h[6] = swap32(state->h[6]);
-	state->h[7] = swap32(state->h[7]);
-#undef swap32
-#endif
+		le32_to_cpu_array(state->h, 8);
 		memcpy(v, state->h, 32);
 		v[ 8] = BLAKE2S_IV0;
 		v[ 9] = BLAKE2S_IV1;
