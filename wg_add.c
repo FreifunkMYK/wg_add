@@ -18,6 +18,7 @@
 
 #include "blake2s.h"
 #include "curve25519.h"
+#include "md5.h"
 #include "wireguard.h"
 #include "key_tree.h"
 
@@ -61,16 +62,11 @@ void wg_key_to_ipv6(char *ipv6, const wg_key key) {
 	char md5[16] = {0};
 
 	wg_key_to_base64(key_str, key);
-	{
-		gcry_md_hd_t hd;
-		if (gcry_md_open(&hd, GCRY_MD_MD5, 0)) {
-			return;
-		}
-		gcry_md_write(hd, key_str, sizeof(wg_key_b64_string)-1);
-		gcry_md_putc(hd, '\n');
-		memcpy(md5, gcry_md_read(hd, 0), gcry_md_get_algo_dlen(GCRY_MD_MD5));
-		gcry_md_close(hd);
-	}
+	struct md5_state state;
+	md5_init(&state);
+	md5_update(&state, key_str, sizeof(wg_key_b64_string)-1);
+	md5_update(&state, "\n", 1);
+	md5_final(&state, md5);
 	sprintf(ipv6, "fe80::%02x:%02xff:fe%02x:%02x%02x", (uint8_t)md5[0], (uint8_t)md5[1], (uint8_t)md5[2], (uint8_t)md5[3], (uint8_t)md5[4]);
 }
 
