@@ -19,6 +19,7 @@
 #include "blake2s.h"
 #include "curve25519.h"
 #include "md5.h"
+#include "chacha20poly1305.h"
 #include "wireguard.h"
 #include "key_tree.h"
 
@@ -253,10 +254,6 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	memcpy(ekey_pub, packet+8, 32);
 
 	wg_key decrypted_key;
-	wg_key encrypted_key;
-	memcpy(encrypted_key, packet+40, 32);
-	u_char auth_tag[16];
-	memcpy(auth_tag, packet+72, 16);
 	wg_key c_and_k[2], h;
 	wg_key *c = &c_and_k[0], *k = &c_and_k[1];
 	// c = Hash(CONSTRUCTION)
@@ -275,36 +272,8 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	// (c, k) = KDF2(c, dh1)
 	wg_kdf(c, dh1, 32, 2, c_and_k);
 	// Spub_i = AEAD-Decrypt(k, 0, msg.static, h)
-	{
-		gcry_cipher_hd_t    hd;
-		if(gcry_cipher_open(&hd, GCRY_CIPHER_CHACHA20, GCRY_CIPHER_MODE_POLY1305, 0)) {
-			return;
-		}
-		if (gcry_cipher_setkey(hd, k, 32)) {
-			gcry_cipher_close(hd);
-			return;
-		}
-
-		u_char nonce[12] = {0};
-		if(gcry_cipher_setiv(hd, nonce, 12)) {
-			gcry_cipher_close(hd);
-			return;
-		}
-		if(gcry_cipher_authenticate(hd, h, 32)) {
-			gcry_cipher_close(hd);
-			return;
-		}
-		if(gcry_cipher_decrypt(hd, decrypted_key, 32, encrypted_key, 32)) {
-			gcry_cipher_close(hd);
-			return;
-		}
-		if(gcry_cipher_checktag(hd, auth_tag, 16)) {
-			gcry_cipher_close(hd);
-			return;
-		}
-
-		gcry_cipher_close(hd);
-	}
+	if(!chacha20poly1305_decrypt(decrypted_key, packet+40, 48, dh1, 32, h))
+		return;
 
 	add_key_to_wg(decrypted_key);
 	return;
