@@ -1,4 +1,4 @@
-LDFLAGS := -lgcrypt -lpthread
+LDFLAGS := -lpthread
 
 all: wg_add
 
