@@ -270,7 +270,7 @@ void process_wg_initiation(const u_char *packet, uint16_t len) {
 	// (c, k) = KDF2(c, dh1)
 	wg_kdf(c, dh1, 32, 2, c_and_k);
 	// Spub_i = AEAD-Decrypt(k, 0, msg.static, h)
-	if(!chacha20poly1305_decrypt(decrypted_key, packet+40, 48, dh1, 32, h))
+	if(!chacha20poly1305_decrypt(decrypted_key, packet+40, 48, h, 32, (uint8_t *)k))
 		return;
 
 	add_key_to_wg(decrypted_key);

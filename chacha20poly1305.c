@@ -151,7 +151,7 @@ void chacha_block(uint32_t *state, uint8_t *stream, int nrounds)
 	chacha_permute(x, nrounds);
 
 	for (i = 0; i < 16; i++)
-		*(uint32_t *)(&stream[i * sizeof(uint32_t)])=(uint32_t)(x[i] + state[i]);
+		*(uint32_t *)(&stream[i * sizeof(uint32_t)])=le32_to_cpu(x[i] + state[i]);
 
 	state[12]++;
 }
@@ -206,7 +206,6 @@ static inline void crypto_xor_cpy(uint8_t *dst, const uint8_t *src1, const uint8
 void chacha_crypt(uint32_t *state, uint8_t *dst, const uint8_t *src,
 			  unsigned int bytes, int nrounds)
 {
-	/* aligned to potentially speed up crypto_xor() */
 	uint8_t stream[CHACHA_BLOCK_SIZE];
 
 	while (bytes >= CHACHA_BLOCK_SIZE) {
@@ -464,10 +463,10 @@ void poly1305_core_emit(const struct poly1305_state *state, const uint32_t nonce
 		h3 = (uint32_t)f;
 	}
 
-	mac[0] = le32_to_cpus((uint32_t *)&h0);
-	mac[4] = le32_to_cpus((uint32_t *)&h1);
-	mac[8] = le32_to_cpus((uint32_t *)&h2);
-	mac[12] = le32_to_cpus((uint32_t *)&h3);
+	*(uint32_t *)&mac[0] = le32_to_cpu(h0);
+	*(uint32_t *)&mac[4] = le32_to_cpu(h1);
+	*(uint32_t *)&mac[8] = le32_to_cpu(h2);
+	*(uint32_t *)&mac[12] = le32_to_cpu(h3);
 }
 
 void poly1305_final(struct poly1305_desc_ctx *desc, uint8_t *dst)
@@ -520,7 +519,7 @@ static bool __chacha20poly1305_decrypt(uint8_t *dst, const uint8_t *src, const s
 
 	poly1305_final(&poly1305_state, b.mac);
 
-	ret = memcmp(b.mac, src + dst_len, POLY1305_DIGEST_SIZE) != 0;
+	ret = memcmp(b.mac, src + dst_len, POLY1305_DIGEST_SIZE);
 	if (!ret)
 		chacha20_crypt(chacha_state, dst, src, dst_len);
 

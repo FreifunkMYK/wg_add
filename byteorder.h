@@ -16,6 +16,18 @@ static inline uint64_t le64_to_cpus(const void *buf)
 #endif
 };
 
+static inline uint32_t le32_to_cpu(const uint32_t val)
+{
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	return (((uint32_t)(val) & 0x000000ffu) << 24) | \
+			(((uint32_t)(val) & 0x0000ff00u) <<  8) | \
+			(((uint32_t)(val) & 0x00ff0000u) >>  8) | \
+			(((uint32_t)(val) & 0xff000000u) >> 24);
+#else
+    return val;
+#endif
+};
+
 static inline uint32_t le32_to_cpus(const void *buf)
 {
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
