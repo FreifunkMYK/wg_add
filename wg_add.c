@@ -35,7 +35,6 @@ wg_key server_priv_key;
 wg_key server_pub_key;
 wg_key mac1_key;
 char *wg_device_name;
-char *vx_device_name;
 
 wg_key hash_of_construction;
 wg_key hash_of_c_identifier;
@@ -108,12 +107,6 @@ void add_key_to_wg(wg_key key) {
 		sprintf(cmd, "ip route add %s/128 dev %s", ipv6, wg_device_name);
 		system(cmd);
 	}
-	// bridge fdb
-	{
-		char cmd[100];
-		sprintf(cmd, "bridge fdb append 00:00:00:00:00:00 dev %s dst %s via %s", vx_device_name, ipv6, wg_device_name);
-		system(cmd);
-	}
 
 	add_key_to_tree(key_tree, key);
 }
@@ -148,12 +141,6 @@ void remove_key_from_wg(wg_key key) {
 	{
 		char cmd[100];
 		sprintf(cmd, "ip route del %s/128 dev %s", ipv6, wg_device_name);
-		system(cmd);
-	}
-	// bridge fdb
-	{
-		char cmd[100];
-		sprintf(cmd, "bridge fdb del 00:00:00:00:00:00 dev %s dst %s via %s", vx_device_name, ipv6, wg_device_name);
 		system(cmd);
 	}
 
@@ -320,14 +307,13 @@ void apply_bpf6(int sock, uint16_t port) {
 }
 
 int main(int argc, char **argv) {
-	if( argc != 4 ) {
-		printf("usage: %s <net interface> <wg interface> <vxlan interface>\n", argv[0]);
+	if( argc != 3 ) {
+		printf("usage: %s <net interface> <wg interface>\n", argv[0]);
 		return 1;
 	}
 
 	char *device_name = argv[1];
 	wg_device_name = argv[2];
-	vx_device_name = argv[3];
 	uint16_t port;
 
 	// make output line buffered
