@@ -1,4 +1,4 @@
-LDFLAGS := -lpthread
+LDLIBS := -lpthread
 
 all: wg_add
 
