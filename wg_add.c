@@ -407,7 +407,7 @@ int main(int argc, char **argv) {
 	printf("running...\n");
 
 	while( run ) {
-		int rc = poll(pollfds, 2, 1000);
+		int rc = poll(pollfds, 2, 100);
 		if( rc < 0 ) {
 			perror("poll");
 			run = false;
